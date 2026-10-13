@@ -34,6 +34,18 @@ class parentsync {
     /** @var int[] Allowed intervals in minutes. Zero disables the schedule. */
     public const INTERVALS = [0, 15, 60, 360, 1440];
 
+    /** @var bool True while an explicit sync should drop suspended parent enrolments. */
+    private static $forcing = false;
+
+    /** @var int Nesting of unenrol calls, so a parent-link re-add can be removed once. */
+    private static $depth = 0;
+
+    /** @var array<int,int> Suspended meta enrolments waiting to be removed, keyed by user_enrolments id. */
+    private static $pending = [];
+
+    /** @var bool True once the end-of-request removal is registered. */
+    private static $flushhooked = false;
+
     /**
      * Meta-linked parent courses for a child course.
      *
@@ -112,7 +124,21 @@ class parentsync {
     }
 
     /**
-     * Copy enrolment changes from parent courses into this course.
+     * Whether this course is set to sync on a schedule.
+     *
+     * @param int $courseid
+     * @return bool
+     */
+    public static function is_enabled(int $courseid): bool {
+        $schedule = self::get_schedule($courseid);
+        return !empty($schedule->enabled) && (int)$schedule->intervalmin > 0;
+    }
+
+    /**
+     * Copy active enrolments from parent courses, and remove suspended ones.
+     *
+     * A user who is suspended in a linked parent course is unenrolled from this
+     * course instead of being kept with a suspended enrolment.
      *
      * @param int $courseid Child course id
      */
@@ -120,7 +146,14 @@ class parentsync {
         global $CFG, $DB;
 
         require_once($CFG->dirroot . '/enrol/meta/locallib.php');
-        enrol_meta_sync($courseid);
+        self::$forcing = true;
+        try {
+            enrol_meta_sync($courseid);
+            $removed = self::remove_suspended($courseid);
+        } finally {
+            self::$forcing = false;
+        }
+        mtrace('Removed ' . $removed . ' suspended parent enrolments from course ' . $courseid);
 
         $now = time();
         $record = $DB->get_record('local_em_sync', ['courseid' => $courseid]);
@@ -160,5 +193,128 @@ class parentsync {
             mtrace('Syncing parent enrolments for course ' . $record->courseid);
             self::sync_course((int)$record->courseid);
         }
+    }
+
+    /**
+     * Drop a suspended parent-link enrolment when sync is on, or during an explicit sync.
+     *
+     * @param int $courseid
+     * @param int $userid
+     * @param string $enrolmethod
+     */
+    public static function remove_if_suspended_link(int $courseid, int $userid, string $enrolmethod): void {
+        global $DB;
+
+        // An explicit sync removes these rows after the meta sync finishes, including group membership.
+        if ($enrolmethod !== 'meta' || self::$forcing || self::$depth > 0) {
+            return;
+        }
+        if (!self::is_enabled($courseid)) {
+            return;
+        }
+
+        $enrolment = $DB->get_record_sql(
+            "SELECT ue.id, ue.enrolid, ue.status
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid
+              WHERE e.courseid = :courseid
+                AND e.enrol = :enrol
+                AND ue.userid = :userid
+                AND ue.status = :suspended",
+            [
+                'courseid' => $courseid,
+                'enrol' => 'meta',
+                'userid' => $userid,
+                'suspended' => ENROL_USER_SUSPENDED,
+            ]
+        );
+        if (!$enrolment) {
+            return;
+        }
+
+        self::$pending[(int)$enrolment->id] = $userid;
+        if (!self::$flushhooked) {
+            self::$flushhooked = true;
+            \core_shutdown_manager::register_function([self::class, 'flush_pending']);
+        }
+    }
+
+    /**
+     * Remove parent-link enrolments that were suspended by a later meta sync.
+     */
+    public static function flush_pending(): void {
+        global $DB;
+
+        $pending = self::$pending;
+        self::$pending = [];
+        foreach ($pending as $ueid => $userid) {
+            $enrolment = $DB->get_record('user_enrolments', ['id' => $ueid, 'userid' => $userid]);
+            if (!$enrolment || (int)$enrolment->status !== ENROL_USER_SUSPENDED) {
+                continue;
+            }
+            self::unenrol_meta((int)$enrolment->enrolid, (int)$userid);
+        }
+    }
+
+    /**
+     * Unenrol every user whose parent-link enrolment in this course is suspended.
+     *
+     * @param int $courseid
+     * @return int Number of enrolments removed
+     */
+    public static function remove_suspended(int $courseid): int {
+        global $DB;
+
+        $rows = $DB->get_records_sql(
+            "SELECT ue.id, ue.userid, ue.enrolid
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid
+              WHERE e.courseid = :courseid
+                AND e.enrol = :enrol
+                AND ue.status = :suspended",
+            [
+                'courseid' => $courseid,
+                'enrol' => 'meta',
+                'suspended' => ENROL_USER_SUSPENDED,
+            ]
+        );
+
+        $removed = 0;
+        foreach ($rows as $row) {
+            if (self::unenrol_meta((int)$row->enrolid, (int)$row->userid)) {
+                $removed++;
+            }
+        }
+        return $removed;
+    }
+
+    /**
+     * Remove one meta enrolment.
+     *
+     * @param int $enrolid
+     * @param int $userid
+     * @return bool
+     */
+    protected static function unenrol_meta(int $enrolid, int $userid): bool {
+        global $DB;
+
+        if (self::$depth > 1) {
+            return false;
+        }
+
+        $instance = $DB->get_record('enrol', ['id' => $enrolid, 'enrol' => 'meta']);
+        $plugin = $instance ? enrol_get_plugin('meta') : null;
+        if (!$instance || !$plugin) {
+            return false;
+        }
+
+        self::$depth++;
+        try {
+            $plugin->unenrol_user($instance, $userid);
+        } finally {
+            self::$depth--;
+        }
+
+        return !$DB->record_exists('user_enrolments', ['enrolid' => $enrolid, 'userid' => $userid]);
     }
 }

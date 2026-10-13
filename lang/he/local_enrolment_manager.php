@@ -62,7 +62,7 @@ $string['invaliduserenrolment'] = 'הרישום הזה אינו שייך לקו�
 $string['backtocourse'] = 'חזרה לקורס';
 
 $string['syncheading'] = 'סנכרון רישום מקורס אב';
-$string['syncintro'] = 'התזמון רץ דרך cron. שינוי רישום בקורס אב מקושר (רישום חדש, השהיה או הסרה) מתעדכן גם בקורס הזה. נדרש ש-cron של האתר ירוץ.';
+$string['syncintro'] = 'כשהתזמון פעיל, cron מסנכרן את הרישום מקורס האב. משתמש שהרישום שלו מושהה מוסר מהקורס הזה. משתמש פעיל בקורס האב נשאר רשום או נוסף. נדרש ש-cron של האתר ירוץ.';
 $string['syncparents'] = 'קורסי אב מקושרים';
 $string['syncnoparents'] = 'לקורס הזה אין קישור רישום לקורס אב.';
 $string['syncinterval'] = 'תזמון סנכרון';
@@ -74,7 +74,7 @@ $string['syncinterval_1440'] = 'פעם ביום';
 $string['syncsave'] = 'שמירת תזמון';
 $string['syncsaved'] = 'תזמון הסנכרון נשמר.';
 $string['syncnow'] = 'סנכרון עכשיו';
-$string['confirmsyncnow'] = 'להריץ עכשיו סנכרון רישום מקורסי האב?';
+$string['confirmsyncnow'] = 'להריץ עכשיו סנכרון? משתמשים בסטטוס מושהה יוסרו מהקורס הזה.';
 $string['syncdone'] = 'סנכרון הרישום מקורסי האב הסתיים.';
 $string['synclastdone'] = 'סנכרון אחרון: {$a}';
 $string['syncnever'] = 'הסנכרון עדיין לא רץ.';

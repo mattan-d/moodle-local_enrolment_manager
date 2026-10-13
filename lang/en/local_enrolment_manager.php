@@ -62,7 +62,7 @@ $string['invaliduserenrolment'] = 'This enrolment does not belong to the course.
 $string['backtocourse'] = 'Back to course';
 
 $string['syncheading'] = 'Sync enrolments from a parent course';
-$string['syncintro'] = 'The schedule runs through cron. An enrolment change in a linked parent course (a new enrolment, a suspension, or a removal) is applied to this course as well. The site cron has to be running.';
+$string['syncintro'] = 'When the schedule is on, cron syncs enrolments from the parent course. A user whose enrolment is suspended is removed from this course. A user who is active in the parent course stays enrolled or is added. The site cron has to be running.';
 $string['syncparents'] = 'Linked parent courses';
 $string['syncnoparents'] = 'This course is not linked to a parent course.';
 $string['syncinterval'] = 'Sync schedule';
@@ -74,7 +74,7 @@ $string['syncinterval_1440'] = 'Once a day';
 $string['syncsave'] = 'Save schedule';
 $string['syncsaved'] = 'The sync schedule was saved.';
 $string['syncnow'] = 'Sync now';
-$string['confirmsyncnow'] = 'Sync enrolments from the parent courses now?';
+$string['confirmsyncnow'] = 'Sync now? Users with a suspended enrolment will be removed from this course.';
 $string['syncdone'] = 'Enrolment sync from the parent courses finished.';
 $string['synclastdone'] = 'Last sync: {$a}';
 $string['syncnever'] = 'Sync has not run yet.';
