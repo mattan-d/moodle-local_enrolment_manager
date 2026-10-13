@@ -181,17 +181,30 @@ class parentsync {
 
         $now = time();
         $records = $DB->get_records('local_em_sync', ['enabled' => 1]);
+        if (!$records) {
+            mtrace('No courses have parent enrolment sync turned on.');
+            return;
+        }
+
         foreach ($records as $record) {
+            $courseid = (int)$record->courseid;
             $interval = (int)$record->intervalmin;
             if ($interval <= 0) {
                 continue;
             }
             $lastrun = (int)$record->lastrun;
-            if ($lastrun > 0 && ($lastrun + ($interval * 60)) > $now) {
+            $due = $lastrun <= 0 || ($lastrun + ($interval * 60)) <= $now;
+            if ($due) {
+                mtrace('Syncing parent enrolments for course ' . $courseid);
+                self::sync_course($courseid);
                 continue;
             }
-            mtrace('Syncing parent enrolments for course ' . $record->courseid);
-            self::sync_course((int)$record->courseid);
+
+            // A user removed from one parent is left suspended by Moodle meta sync.
+            // Drop that enrolment on every task run, without waiting for the full interval.
+            $removed = self::remove_suspended($courseid);
+            mtrace('Course ' . $courseid . ' is not due for a full sync. Removed ' . $removed .
+                ' suspended parent enrolments.');
         }
     }
 
@@ -213,7 +226,7 @@ class parentsync {
             return;
         }
 
-        $enrolment = $DB->get_record_sql(
+        $enrolments = $DB->get_records_sql(
             "SELECT ue.id, ue.enrolid, ue.status
                FROM {user_enrolments} ue
                JOIN {enrol} e ON e.id = ue.enrolid
@@ -228,11 +241,13 @@ class parentsync {
                 'suspended' => ENROL_USER_SUSPENDED,
             ]
         );
-        if (!$enrolment) {
+        if (!$enrolments) {
             return;
         }
 
-        self::$pending[(int)$enrolment->id] = $userid;
+        foreach ($enrolments as $enrolment) {
+            self::$pending[(int)$enrolment->id] = $userid;
+        }
         if (!self::$flushhooked) {
             self::$flushhooked = true;
             \core_shutdown_manager::register_function([self::class, 'flush_pending']);

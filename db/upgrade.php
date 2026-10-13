@@ -48,5 +48,9 @@ function xmldb_local_enrolment_manager_upgrade($oldversion) {
         upgrade_plugin_savepoint(true, 2026101303, 'local', 'enrolment_manager');
     }
 
+    if ($oldversion < 2026101304) {
+        upgrade_plugin_savepoint(true, 2026101304, 'local', 'enrolment_manager');
+    }
+
     return true;
 }
