@@ -177,6 +177,58 @@ class manager {
     }
 
     /**
+     * Whether this suspended enrolment may be removed from the course.
+     *
+     * Plugins such as meta and cohort allow manual removal only while the
+     * enrolment is suspended. The page capability is enough, because this
+     * screen is already limited to editing teachers and managers.
+     *
+     * @param \stdClass $instance enrol instance
+     * @param \stdClass $userenrolment user_enrolments record
+     * @param context $context course context
+     * @return bool
+     */
+    public static function can_unenrol(\stdClass $instance, \stdClass $userenrolment, context $context): bool {
+        if ((int)$userenrolment->status !== ENROL_USER_SUSPENDED) {
+            return false;
+        }
+        $plugin = enrol_get_plugin($instance->enrol);
+        if (!$plugin || !$plugin->allow_unenrol_user($instance, $userenrolment)) {
+            return false;
+        }
+        if (has_capability('enrol/' . $instance->enrol . ':unenrol', $context)) {
+            return true;
+        }
+        return has_capability('local/enrolment_manager:view', $context);
+    }
+
+    /**
+     * Remove a suspended enrolment from the course.
+     *
+     * Caller must already have checked the course and can_unenrol().
+     *
+     * @param \stdClass $course
+     * @param \stdClass $userenrolment user_enrolments record
+     * @return bool
+     */
+    public static function unenrol(\stdClass $course, \stdClass $userenrolment): bool {
+        global $DB;
+
+        $instance = $DB->get_record('enrol', [
+            'id' => $userenrolment->enrolid,
+            'courseid' => $course->id,
+        ], '*', MUST_EXIST);
+        $context = \context_course::instance($course->id);
+        if (!self::can_unenrol($instance, $userenrolment, $context)) {
+            return false;
+        }
+
+        $plugin = enrol_get_plugin($instance->enrol);
+        $plugin->unenrol_user($instance, $userenrolment->userid);
+        return !$DB->record_exists('user_enrolments', ['id' => $userenrolment->id]);
+    }
+
+    /**
      * Shared WHERE clause for suspended enrolments in a course.
      *
      * @param int $courseid
@@ -230,6 +282,13 @@ class manager {
             }
             $record->rolenames = $roles[(int)$record->id] ?? '';
             $record->canactivate = $instance && self::can_activate($instance, $context);
+            $userenrolment = (object)[
+                'id' => $record->ueid,
+                'userid' => $record->id,
+                'enrolid' => $record->instanceid,
+                'status' => $record->status,
+            ];
+            $record->canunenrol = $instance && self::can_unenrol($instance, $userenrolment, $context);
         }
 
         return $records;

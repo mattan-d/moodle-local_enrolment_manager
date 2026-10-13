@@ -64,48 +64,55 @@ $PAGE->set_title(get_string('pluginname', 'local_enrolment_manager'));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->navbar->add(get_string('pluginname', 'local_enrolment_manager'), $listurl);
 
-if ($action === 'activate' && $ueid) {
+if (($action === 'activate' || $action === 'unenrol') && $ueid) {
     $enrolment = manager::get_enrolment($course->id, $ueid);
     if (!$enrolment) {
         throw new moodle_exception('invaliduserenrolment', 'local_enrolment_manager', $listurl);
     }
     $enroluser = core_user::get_user($enrolment->userid, '*', MUST_EXIST);
     $instance = $DB->get_record('enrol', ['id' => $enrolment->enrolid], '*', MUST_EXIST);
+    $name = fullname($enroluser, false, ['escape' => false]);
+    $allowed = $action === 'activate'
+        ? manager::can_activate($instance, $context)
+        : manager::can_unenrol($instance, $enrolment, $context);
+    $failstring = $action === 'activate' ? 'activatefailed' : 'unenrolfailed';
 
-    if ($confirm) {
-        require_sesskey();
-        if ((int)$enrolment->status !== ENROL_USER_SUSPENDED) {
-            redirect($listurl, get_string('notsuspended', 'local_enrolment_manager'), null,
-                \core\output\notification::NOTIFY_ERROR);
-        }
-        if (!manager::can_activate($instance, $context)) {
-            throw new required_capability_exception($context, 'enrol/' . $instance->enrol . ':manage', 'nopermissions', '');
-        }
-        $name = fullname($enroluser, false, ['escape' => false]);
-        if (!manager::activate($course, $enrolment)) {
-            redirect($listurl, get_string('activatefailed', 'local_enrolment_manager'), null,
-                \core\output\notification::NOTIFY_ERROR);
-        }
-        redirect($listurl, get_string('activated', 'local_enrolment_manager', $name), null,
-            \core\output\notification::NOTIFY_SUCCESS);
-    }
-
-    if ((int)$enrolment->status !== ENROL_USER_SUSPENDED || !manager::can_activate($instance, $context)) {
-        redirect($listurl, get_string('activatefailed', 'local_enrolment_manager'), null,
+    if ((int)$enrolment->status !== ENROL_USER_SUSPENDED || !$allowed) {
+        redirect($listurl, get_string($failstring, 'local_enrolment_manager'), null,
             \core\output\notification::NOTIFY_ERROR);
     }
 
+    if ($confirm) {
+        require_sesskey();
+        $ok = $action === 'activate'
+            ? manager::activate($course, $enrolment)
+            : manager::unenrol($course, $enrolment);
+        if (!$ok) {
+            redirect($listurl, get_string($failstring, 'local_enrolment_manager'), null,
+                \core\output\notification::NOTIFY_ERROR);
+        }
+        $donestring = $action === 'activate' ? 'activated' : 'unenrolled';
+        redirect($listurl, get_string($donestring, 'local_enrolment_manager', $name), null,
+            \core\output\notification::NOTIFY_SUCCESS);
+    }
+
     $confirmurl = new moodle_url($listurl, [
-        'action' => 'activate',
+        'action' => $action,
         'ueid' => $ueid,
         'confirm' => 1,
         'sesskey' => sesskey(),
     ]);
-    $name = fullname($enroluser, false, ['escape' => false]);
+    $confirmstring = $action === 'activate' ? 'confirmactivate' : 'confirmunenrol';
+    $continuestr = $action === 'unenrol' ? get_string('unenrol', 'local_enrolment_manager') : get_string('continue');
 
     echo $OUTPUT->header();
     echo $OUTPUT->heading(get_string('pageheading', 'local_enrolment_manager'));
-    echo $OUTPUT->confirm(get_string('confirmactivate', 'local_enrolment_manager', $name), $confirmurl, $listurl);
+    echo $OUTPUT->confirm(
+        get_string($confirmstring, 'local_enrolment_manager', $name),
+        $confirmurl,
+        $listurl,
+        ['continuestr' => $continuestr]
+    );
     echo $OUTPUT->footer();
     exit;
 }
@@ -284,19 +291,30 @@ function local_enrolment_manager_access_cell(\stdClass $record): string {
 }
 
 /**
- * Reactivate link, or a note when the enrol plugin forbids manual edits.
+ * Reactivate and remove links for one suspended enrolment.
  *
  * @param \stdClass $record
  * @param moodle_url $listurl
  * @return string
  */
 function local_enrolment_manager_action_cell(\stdClass $record, moodle_url $listurl): string {
-    if (empty($record->canactivate)) {
-        return html_writer::span(get_string('cannotactivate', 'local_enrolment_manager'), 'text-muted small');
+    $actions = [];
+    if (!empty($record->canactivate)) {
+        $actions[] = html_writer::link(
+            new moodle_url($listurl, ['action' => 'activate', 'ueid' => $record->ueid]),
+            get_string('activate', 'local_enrolment_manager'),
+            ['class' => 'btn btn-sm btn-secondary mr-1']
+        );
     }
-    $url = new moodle_url($listurl, [
-        'action' => 'activate',
-        'ueid' => $record->ueid,
-    ]);
-    return html_writer::link($url, get_string('activate', 'local_enrolment_manager'), ['class' => 'btn btn-sm btn-secondary']);
+    if (!empty($record->canunenrol)) {
+        $actions[] = html_writer::link(
+            new moodle_url($listurl, ['action' => 'unenrol', 'ueid' => $record->ueid]),
+            get_string('unenrol', 'local_enrolment_manager'),
+            ['class' => 'btn btn-sm btn-outline-danger']
+        );
+    }
+    if (!$actions) {
+        return html_writer::span(get_string('cannotchange', 'local_enrolment_manager'), 'text-muted small');
+    }
+    return implode('', $actions);
 }
