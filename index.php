@@ -26,6 +26,7 @@ require_once(__DIR__ . '/../../config.php');
 
 use core_user\fields;
 use local_enrolment_manager\manager;
+use local_enrolment_manager\parentsync;
 
 $id = required_param('id', PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
@@ -63,6 +64,48 @@ $PAGE->set_pagelayout('incourse');
 $PAGE->set_title(get_string('pluginname', 'local_enrolment_manager'));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->navbar->add(get_string('pluginname', 'local_enrolment_manager'), $listurl);
+
+if ($action === 'saveschedule') {
+    require_sesskey();
+    $interval = optional_param('interval', 0, PARAM_INT);
+    if (!in_array($interval, parentsync::INTERVALS, true)) {
+        redirect($listurl, get_string('syncinvalidinterval', 'local_enrolment_manager'), null,
+            \core\output\notification::NOTIFY_ERROR);
+    }
+    parentsync::save_schedule($course->id, $interval);
+    redirect($listurl, get_string('syncsaved', 'local_enrolment_manager'), null,
+        \core\output\notification::NOTIFY_SUCCESS);
+}
+
+if ($action === 'syncnow') {
+    $parents = parentsync::get_parents($course->id);
+    if (!$parents) {
+        redirect($listurl, get_string('syncnoparents', 'local_enrolment_manager'), null,
+            \core\output\notification::NOTIFY_ERROR);
+    }
+    if ($confirm) {
+        require_sesskey();
+        parentsync::sync_course($course->id);
+        redirect($listurl, get_string('syncdone', 'local_enrolment_manager'), null,
+            \core\output\notification::NOTIFY_SUCCESS);
+    }
+
+    $confirmurl = new moodle_url($listurl, [
+        'action' => 'syncnow',
+        'confirm' => 1,
+        'sesskey' => sesskey(),
+    ]);
+    echo $OUTPUT->header();
+    echo $OUTPUT->heading(get_string('syncheading', 'local_enrolment_manager'));
+    echo $OUTPUT->confirm(
+        get_string('confirmsyncnow', 'local_enrolment_manager'),
+        $confirmurl,
+        $listurl,
+        ['continuestr' => get_string('syncnow', 'local_enrolment_manager')]
+    );
+    echo $OUTPUT->footer();
+    exit;
+}
 
 if (($action === 'activate' || $action === 'unenrol') && $ueid) {
     $enrolment = manager::get_enrolment($course->id, $ueid);
@@ -133,7 +176,9 @@ if ($total > 0 && $page > 0 && !$records) {
 $identityfields = fields::for_identity($context)->get_required_fields();
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(get_string('pageheading', 'local_enrolment_manager'));
+echo $OUTPUT->heading(get_string('pluginname', 'local_enrolment_manager'));
+local_enrolment_manager_sync_section($course->id, $listurl);
+echo $OUTPUT->heading(get_string('pageheading', 'local_enrolment_manager'), 3);
 echo html_writer::div(get_string('pageintro', 'local_enrolment_manager'), 'mb-3');
 
 $searchurl = new moodle_url('/local/enrolment_manager/index.php');
@@ -206,6 +251,86 @@ echo html_writer::div(
     'mt-3'
 );
 echo $OUTPUT->footer();
+
+/**
+ * Parent-course sync schedule and an immediate sync action.
+ *
+ * @param int $courseid
+ * @param moodle_url $listurl
+ */
+function local_enrolment_manager_sync_section(int $courseid, moodle_url $listurl): void {
+    global $OUTPUT;
+
+    $parents = parentsync::get_parents($courseid);
+    $schedule = parentsync::get_schedule($courseid);
+
+    echo $OUTPUT->heading(get_string('syncheading', 'local_enrolment_manager'), 3);
+    echo html_writer::div(get_string('syncintro', 'local_enrolment_manager'), 'mb-3');
+
+    if (!$parents) {
+        echo $OUTPUT->notification(get_string('syncnoparents', 'local_enrolment_manager'), 'info');
+        return;
+    }
+
+    echo html_writer::tag('h4', get_string('syncparents', 'local_enrolment_manager'), ['class' => 'h5']);
+    $items = [];
+    foreach ($parents as $parent) {
+        $name = html_writer::link(
+            new moodle_url('/course/view.php', ['id' => $parent->parentid]),
+            format_string($parent->fullname, true, ['escape' => false, 'context' => context_course::instance($courseid)])
+        );
+        if ((int)$parent->status !== ENROL_INSTANCE_ENABLED) {
+            $name .= ' ' . html_writer::span(get_string('parentdisabled', 'local_enrolment_manager'), 'badge badge-secondary');
+        }
+        $items[] = $name;
+    }
+    echo html_writer::alist($items, ['class' => 'mb-3']);
+
+    if (!empty($schedule->lastrun)) {
+        echo html_writer::div(
+            get_string('synclastdone', 'local_enrolment_manager', userdate($schedule->lastrun)),
+            'mb-3 text-muted'
+        );
+    } else {
+        echo html_writer::div(get_string('syncnever', 'local_enrolment_manager'), 'mb-3 text-muted');
+    }
+
+    $options = [];
+    foreach (parentsync::INTERVALS as $minutes) {
+        $options[$minutes] = get_string('syncinterval_' . $minutes, 'local_enrolment_manager');
+    }
+
+    $formurl = new moodle_url('/local/enrolment_manager/index.php');
+    echo html_writer::start_tag('form', [
+        'method' => 'post',
+        'action' => $formurl->out(false),
+        'class' => 'mb-4',
+    ]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'id', 'value' => $courseid]);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'action', 'value' => 'saveschedule']);
+    echo html_writer::empty_tag('input', ['type' => 'hidden', 'name' => 'sesskey', 'value' => sesskey()]);
+    echo html_writer::tag('label', get_string('syncinterval', 'local_enrolment_manager'), [
+        'for' => 'sync-interval',
+        'class' => 'mr-2',
+    ]);
+    echo html_writer::select(
+        $options,
+        'interval',
+        (int)$schedule->intervalmin,
+        false,
+        ['id' => 'sync-interval', 'class' => 'custom-select w-auto d-inline-block mr-2']
+    );
+    echo html_writer::tag('button', get_string('syncsave', 'local_enrolment_manager'), [
+        'type' => 'submit',
+        'class' => 'btn btn-primary mr-2',
+    ]);
+    echo html_writer::link(
+        new moodle_url($listurl, ['action' => 'syncnow']),
+        get_string('syncnow', 'local_enrolment_manager'),
+        ['class' => 'btn btn-secondary']
+    );
+    echo html_writer::end_tag('form');
+}
 
 /**
  * User name, picture, identity fields and account-suspended badge.
